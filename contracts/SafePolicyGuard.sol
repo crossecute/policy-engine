@@ -321,6 +321,24 @@ contract SafePolicyGuard is PolicyEngine, ISafeModuleGuard, ISafeTransactionGuar
         return SignatureExtension.payload(signatures, _CONTEXT_TYPE_HASH);
     }
 
+    /**
+     * @dev `signatures` without the policy context extension, if one is present. Its owner
+     *      signatures, including any dynamic contract-signature data, are left unchanged.
+     */
+    function _ownerSignatures(bytes calldata signatures) internal pure returns (bytes calldata) {
+        if (!SignatureExtension.has(signatures, _CONTEXT_TYPE_HASH)) {
+            return signatures;
+        }
+
+        bytes calldata context = SignatureExtension.payload(signatures, _CONTEXT_TYPE_HASH);
+        uint256 ownerLength;
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") {
+            ownerLength := sub(context.offset, signatures.offset)
+        }
+        return signatures[:ownerLength];
+    }
+
     function _emptyContext() internal pure returns (bytes calldata) {
         return msg.data[0:0];
     }
