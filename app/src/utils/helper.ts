@@ -148,24 +148,21 @@ export function encodeData(
  * @param returnArray - Whether to return the full result array or just the first element
  * @returns Promise resolving to the decoded contract call result
  */
-export const call = async (
+export const call = async <T>(
   sdk: SafeAppsSDK,
   address: string,
   method: string,
   params: unknown[],
   returnArray: boolean = false
-): Promise<any> => {
+): Promise<T> => {
   const resp = await sdk.eth.call([
     {
       to: address,
       data: CONTRACT_INTERFACE.encodeFunctionData(method, params),
     },
   ])
-  if (returnArray) {
-    return CONTRACT_INTERFACE.decodeFunctionResult(method, resp)
-  } else {
-    return CONTRACT_INTERFACE.decodeFunctionResult(method, resp)[0]
-  }
+  const result = CONTRACT_INTERFACE.decodeFunctionResult(method, resp)
+  return (returnArray ? result : result[0]) as T
 }
 
 /**

@@ -61,6 +61,12 @@ The Policy Engine Safe App enables Safe owners to:
    VITE_BASE_URL=/policy-engine/
    ```
 
+   Set `VITE_POLICY_ENGINE_ADDRESS` to the address of the expiry-aware
+   `AppSafePolicyGuard` deployment. With that address the app reads each
+   request's application window and lets owners request expired changes again.
+   The default address points to the original demo deployment, whose requests
+   stay applicable after maturity.
+
 4. **Start development server**:
    ```bash
    npm run dev

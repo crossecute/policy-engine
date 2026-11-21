@@ -21,13 +21,19 @@ import {
   CONTRACT_INTERFACE,
   COSIGNER_POLICY_ADDRESS,
   GUARD_STORAGE_SLOT,
+  LEGACY_POLICY_ENGINE_ADDRESS,
   MILLISECONDS_IN_SECOND,
   MULTISEND_CALL_ONLY,
   MULTISEND_POLICY_ADDRESS,
   POLICY_ADDRESS_NAME,
   ZERO_SELECTOR,
 } from './utils/constants'
-import type { FormData, AccessInfo, PendingInfo } from './utils/types'
+import type {
+  FormData,
+  AccessInfo,
+  ConfigurationWindow,
+  PendingInfo,
+} from './utils/types'
 import {
   isValidAddress,
   validateSelector,
@@ -47,12 +53,22 @@ import {
   getCosignerAddress,
 } from './utils/helper'
 
+function requestStatus(window: ConfigurationWindow, now: bigint | null) {
+  if (now === null) return 'checking'
+  if (now < window.activeFrom) return 'pending'
+  if (window.expiresAt !== null && now >= window.expiresAt) return 'expired'
+  return 'ready'
+}
+
 function App() {
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [txGuard, setTxGuard] = useState<string | null>(null)
   const [policyEngineInSafe, setPolicyEngineInSafe] = useState<boolean>(false)
-  const [removalTimestamp, setRemovalTimestamp] = useState<bigint>(0n)
+  const [removal, setRemoval] = useState<
+    { root: string; window: ConfigurationWindow } | 'allowed' | null
+  >(null)
+  const [now, setNow] = useState<bigint | null>(null)
   const [currentPendingConfigurations, setCurrentPendingConfigurations] =
     useState<PendingInfo[]>([])
   const [allowedAccessesInfo, setAllowedAccessesInfo] = useState<AccessInfo[]>(
@@ -67,6 +83,47 @@ function App() {
     isConnected,
     error: connectionError,
   } = useSafeConnection()
+
+  useEffect(() => {
+    if (!isConnected || !policyEngineAddress) return
+    let timer: number | undefined
+    let active = true
+    async function refreshBlockTime() {
+      try {
+        const { timestamp } = await sdk.eth.getBlockByNumber(['latest', false])
+        if (active) setNow(BigInt(timestamp) * MILLISECONDS_IN_SECOND)
+      } catch {
+        if (active) setNow(null)
+      } finally {
+        if (active) timer = window.setTimeout(refreshBlockTime, 5000)
+      }
+    }
+    void refreshBlockTime()
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+    }
+  }, [isConnected, policyEngineAddress, sdk.eth])
+
+  const readRequestWindow = useCallback(
+    async (address: string, root: string): Promise<ConfigurationWindow> => {
+      const args = [ethers.getAddress(safe.safeAddress), root]
+      const [maturity, expiry] = await Promise.all([
+        call<bigint>(sdk, address, 'rootConfigured', args),
+        address === LEGACY_POLICY_ENGINE_ADDRESS
+          ? ethers.MaxUint256
+          : call<bigint>(sdk, address, 'rootExpiry', args),
+      ])
+      return {
+        activeFrom: maturity * MILLISECONDS_IN_SECOND,
+        expiresAt:
+          expiry === ethers.MaxUint256
+            ? null
+            : (maturity + expiry) * MILLISECONDS_IN_SECOND,
+      }
+    },
+    [safe.safeAddress, sdk]
+  )
 
   // Handle connection errors from the custom hook
   useEffect(() => {
@@ -86,7 +143,7 @@ function App() {
       const result = ethers.getAddress(
         '0x' +
           (
-            await call(sdk, safe.safeAddress, 'getStorageAt', [
+            await call<string>(sdk, safe.safeAddress, 'getStorageAt', [
               GUARD_STORAGE_SLOT,
               1,
             ])
@@ -111,7 +168,7 @@ function App() {
         return
       }
       // Fetch all the configurations
-      const configurationRoots = await call(
+      const configurationRoots = await call<string[]>(
         sdk,
         policyEngineAddress,
         'getConfigurationRoots',
@@ -142,19 +199,13 @@ function App() {
         }
       }
 
-      // If yes, we set the removal timestamp of the guard based on that.
       if (removalRoot != null) {
-        const getRootTimestamp = await call(
-          sdk,
-          policyEngineAddress,
-          'rootConfigured',
-          [ethers.getAddress(safe.safeAddress), removalRoot]
-        )
-        if (getRootTimestamp && getRootTimestamp > 0n) {
-          setRemovalTimestamp(BigInt(getRootTimestamp) * MILLISECONDS_IN_SECOND)
-        }
+        setRemoval({
+          root: removalRoot,
+          window: await readRequestWindow(policyEngineAddress, removalRoot),
+        })
       } else {
-        const [, policy] = await call(
+        const [, policy] = await call<[bigint, string]>(
           sdk,
           policyEngineAddress,
           'getPolicy',
@@ -166,16 +217,16 @@ function App() {
           ],
           true
         )
-        if (ethers.getAddress(policy) === ALLOW_POLICY_ADDRESS) {
-          setRemovalTimestamp(1n)
-        }
+        setRemoval(
+          ethers.getAddress(policy) === ALLOW_POLICY_ADDRESS ? 'allowed' : null
+        )
       }
     } catch (error) {
       setErrorMessage('Failed to fetch guard removal info with error: ' + error)
     } finally {
       setLoading(false)
     }
-  }, [policyEngineAddress, safe.safeAddress, sdk])
+  }, [policyEngineAddress, readRequestWindow, safe.safeAddress, sdk])
 
   // Fetch the current pending configurations
   const fetchCurrentPendingConfigurations = useCallback(async () => {
@@ -188,7 +239,7 @@ function App() {
         return
       }
       // Fetch all the configuration roots
-      const configurationRoots = await call(
+      const configurationRoots = await call<string[]>(
         sdk,
         policyEngineAddress,
         'getConfigurationRoots',
@@ -199,21 +250,21 @@ function App() {
       const pendingConfigurations: PendingInfo[] = await Promise.all(
         configurationRoots.map(async (root: string) => {
           const config = (
-            await call(sdk, policyEngineAddress, 'getConfigurations', [root])
+            await call<AccessInfo[]>(
+              sdk,
+              policyEngineAddress,
+              'getConfigurations',
+              [root]
+            )
           )[0]
-          const timestamp = await call(
-            sdk,
-            policyEngineAddress,
-            'rootConfigured',
-            [ethers.getAddress(safe.safeAddress), root]
-          )
           return {
+            root,
             target: config.target,
             selector: config.selector,
             operation: BigInt(config.operation),
             policy: config.policy,
             data: config.data,
-            activeFrom: timestamp * MILLISECONDS_IN_SECOND,
+            ...(await readRequestWindow(policyEngineAddress, root)),
           }
         })
       )
@@ -225,7 +276,7 @@ function App() {
     } finally {
       setLoading(false)
     }
-  }, [policyEngineAddress, safe.safeAddress, sdk])
+  }, [policyEngineAddress, readRequestWindow, safe.safeAddress, sdk])
 
   // Fetch the current allowed accesses
   const fetchCurrentAllowedAccesses = useCallback(async () => {
@@ -247,7 +298,9 @@ function App() {
       // Fetch access info using getAccessInfo
       const accessInfos = await Promise.all(
         accesses.map(async (access: bigint) => {
-          const [target, selector, operation, data] = await call(
+          const [target, selector, operation, data] = await call<
+            [string, string, bigint, AccessInfo['data']]
+          >(
             sdk,
             policyEngineAddress,
             'getAccessInfo',
@@ -261,7 +314,7 @@ function App() {
       const allowedAccesses: AccessInfo[] = await Promise.all(
         accessInfos.map(async ({ target, selector, operation, data }) => {
           // For getPolicy, we need to construct proper calldata that includes the selector
-          const [, policy] = await call(
+          const [, policy] = await call<[bigint, string]>(
             sdk,
             policyEngineAddress,
             'getPolicy',
@@ -447,6 +500,33 @@ function App() {
     }
   }, [fetchGuardRemovalInfo, policyEngineAddress, safe.safeAddress, sdk.txs])
 
+  const requestAgain = useCallback(
+    async (root: string) => {
+      if (!policyEngineAddress) return
+      setLoading(true)
+      setErrorMessage(null)
+      try {
+        await sdk.txs.send({
+          txs: [
+            {
+              to: policyEngineAddress,
+              value: '0',
+              data: CONTRACT_INTERFACE.encodeFunctionData(
+                'requestConfiguration',
+                [root]
+              ),
+            },
+          ],
+        })
+      } catch (error) {
+        setErrorMessage('Failed to request configuration again: ' + error)
+      } finally {
+        setLoading(false)
+      }
+    },
+    [policyEngineAddress, sdk.txs]
+  )
+
   // Schedule allowed transactions
   const setAllowedTx = useCallback(
     async (formData: FormData) => {
@@ -626,6 +706,9 @@ function App() {
     [policyEngineAddress, sdk.txs]
   )
 
+  const removalStatus =
+    removal && removal !== 'allowed' ? requestStatus(removal.window, now) : null
+
   return (
     <>
       {/* Disclaimer */}
@@ -656,7 +739,7 @@ function App() {
             {/* Enable or disable Guard */}
             <div>
               {policyEngineInSafe ? (
-                removalTimestamp == 0n ? (
+                removal === null ? (
                   <div className="card">
                     <Alert severity="success" style={{ margin: '1em' }}>
                       Policy Engine is Activated!
@@ -673,7 +756,7 @@ function App() {
                   </div>
                 ) : (
                   <div className="card">
-                    {removalTimestamp === 1n ? (
+                    {removal === 'allowed' ? (
                       <Button
                         variant="contained"
                         color="error"
@@ -684,12 +767,27 @@ function App() {
                           ? 'Submitting transaction...'
                           : 'Deactivate Policy Engine'}
                       </Button>
+                    ) : removalStatus === 'expired' ? (
+                      <>
+                        <Alert severity="warning" style={{ margin: '1em' }}>
+                          Policy Engine removal request expired.
+                        </Alert>
+                        <Button
+                          variant="contained"
+                          onClick={() => requestAgain(removal.root)}
+                          disabled={loading}
+                        >
+                          Request removal again
+                        </Button>
+                      </>
                     ) : (
                       <>
                         <Alert severity="info" style={{ margin: '1em' }}>
-                          {removalTimestamp > BigInt(Date.now())
-                            ? `Policy Engine Removal Scheduled for ${new Date(Number(removalTimestamp)).toLocaleString()}`
-                            : 'Policy Engine Removal Can be Executed Now after AllowPolicy for setGuard is Applied'}
+                          {removalStatus === 'checking'
+                            ? 'Checking chain time…'
+                            : removalStatus === 'pending'
+                              ? `Policy Engine Removal Scheduled for ${new Date(Number(removal.window.activeFrom)).toLocaleString()}`
+                              : 'Policy Engine Removal Can be Executed Now after AllowPolicy for setGuard is Applied'}
                         </Alert>
                         <Button
                           variant="contained"
@@ -1023,74 +1121,88 @@ function App() {
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {currentPendingConfigurations.map(configuration => (
-                          <TableRow
-                            key={configuration.target + configuration.selector}
-                            sx={{
-                              '&:last-child td, &:last-child th': { border: 0 },
-                            }}
-                          >
-                            <TableCell component="th" scope="row">
-                              {getAddressName(
-                                configuration.target,
-                                safe.safeAddress
-                              ) !== null
-                                ? getAddressName(
-                                    configuration.target,
-                                    safe.safeAddress
-                                  )
-                                : String(configuration.target)}
-                            </TableCell>
-                            <TableCell>
-                              {decodeSelector(configuration.selector)}
-                            </TableCell>
-                            <TableCell>
-                              {configuration.operation === 0n
-                                ? 'Call'
-                                : 'DelegateCall'}
-                            </TableCell>
-                            <TableCell>
-                              {getAddressName(configuration.policy) !== null
-                                ? getAddressName(configuration.policy)
-                                : String(configuration.policy)}
-                            </TableCell>
-                            <TableCell>
-                              {decodeData(
-                                configuration.policy,
-                                configuration.data
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              {configuration.activeFrom < BigInt(Date.now())
-                                ? 'Now'
-                                : 'Will be active at ' +
-                                  new Date(
-                                    Number(configuration.activeFrom)
-                                  ).toLocaleString()}
-                            </TableCell>
-                            <TableCell align="right">
-                              <Button
-                                variant="contained"
-                                color="primary"
-                                onClick={() => {
-                                  applyConfiguration({
-                                    target: configuration.target,
-                                    selector: configuration.selector,
-                                    operation: configuration.operation,
-                                    policy: configuration.policy,
-                                    data: configuration.data,
-                                  })
-                                }}
-                                disabled={
-                                  loading ||
-                                  configuration.activeFrom > BigInt(Date.now())
-                                }
-                              >
-                                Apply
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                        {currentPendingConfigurations.map(configuration => {
+                          const status = requestStatus(configuration, now)
+                          return (
+                            <TableRow
+                              key={configuration.root}
+                              sx={{
+                                '&:last-child td, &:last-child th': {
+                                  border: 0,
+                                },
+                              }}
+                            >
+                              <TableCell component="th" scope="row">
+                                {getAddressName(
+                                  configuration.target,
+                                  safe.safeAddress
+                                ) !== null
+                                  ? getAddressName(
+                                      configuration.target,
+                                      safe.safeAddress
+                                    )
+                                  : String(configuration.target)}
+                              </TableCell>
+                              <TableCell>
+                                {decodeSelector(configuration.selector)}
+                              </TableCell>
+                              <TableCell>
+                                {configuration.operation === 0n
+                                  ? 'Call'
+                                  : 'DelegateCall'}
+                              </TableCell>
+                              <TableCell>
+                                {getAddressName(configuration.policy) !== null
+                                  ? getAddressName(configuration.policy)
+                                  : String(configuration.policy)}
+                              </TableCell>
+                              <TableCell>
+                                {decodeData(
+                                  configuration.policy,
+                                  configuration.data
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {status === 'checking'
+                                  ? 'Checking chain time…'
+                                  : status === 'expired'
+                                    ? 'Expired'
+                                    : status === 'ready'
+                                      ? 'Now'
+                                      : 'Will be active at ' +
+                                        new Date(
+                                          Number(configuration.activeFrom)
+                                        ).toLocaleString()}
+                              </TableCell>
+                              <TableCell align="right">
+                                <Button
+                                  variant="contained"
+                                  color="primary"
+                                  onClick={() => {
+                                    if (status === 'expired') {
+                                      return requestAgain(configuration.root)
+                                    }
+                                    applyConfiguration({
+                                      target: configuration.target,
+                                      selector: configuration.selector,
+                                      operation: configuration.operation,
+                                      policy: configuration.policy,
+                                      data: configuration.data,
+                                    })
+                                  }}
+                                  disabled={
+                                    loading ||
+                                    (status !== 'ready' && status !== 'expired')
+                                  }
+                                >
+                                  {status === 'expired'
+                                    ? 'Request again'
+                                    : 'Apply'}
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
                       </TableBody>
                     </Table>
                   </TableContainer>

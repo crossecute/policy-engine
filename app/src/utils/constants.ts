@@ -36,8 +36,10 @@ export const SUPPORTED_CHAINS = [100, 11155111, 84532]
  * Core Policy Engine contract address
  * Deployed on supported networks with the same address
  */
-export const POLICY_ENGINE_ADDRESS = ethers.getAddress(
+export const LEGACY_POLICY_ENGINE_ADDRESS =
   '0x1Edd8486031b69205C0fD84924DFe171C6c6688E'
+export const POLICY_ENGINE_ADDRESS = ethers.getAddress(
+  import.meta.env.VITE_POLICY_ENGINE_ADDRESS || LEGACY_POLICY_ENGINE_ADDRESS
 )
 
 /**
@@ -136,6 +138,7 @@ const CONTRACT_INTERFACE_ABI = [
 
   // Policy Engine View Functions
   'function rootConfigured(address safe, bytes32 configureRoot) external view returns (uint256 timestamp)',
+  'function rootExpiry(address safe, bytes32 configureRoot) external view returns (uint256)',
   'function getAccesses(address safe) external view returns (uint256[] memory)',
   'function getAccessInfo(address safe, uint256 access) external view returns (address target, bytes4 selector, uint8 operation, bytes memory data)',
   'function getPolicy(address safe, address to, bytes calldata data, uint8 operation) external view returns (uint256 accessSelector, address policy)',

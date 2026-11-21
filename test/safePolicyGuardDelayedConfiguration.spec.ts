@@ -1,6 +1,7 @@
 import { loadFixture, time } from '@nomicfoundation/hardhat-network-helpers'
 import { expect } from 'chai'
 import { MaxUint256 } from 'ethers'
+import { ethers } from 'hardhat'
 
 import { ONE_DAY_IN_SECONDS } from '../lib/constants'
 import {
@@ -681,6 +682,34 @@ describe('SafePolicyGuard -- delayed configuration', function () {
         .withArgs(root)
       await expect(safePolicyGuard.connect(owner).applyConfiguration([])).to.emit(safePolicyGuard, 'RootApplied')
       expect(await safePolicyGuard.rootExpiry(owner.address, root)).to.equal(0n)
+    })
+
+    it('Should keep demo configuration details when an expired root is requested again', async function () {
+      const { owner, mockPolicy } = await loadFixture(fixture)
+      const demo = await ethers.deployContract('AppSafePolicyGuard', [0n, 30n], owner)
+      const configuration = [
+        createConfiguration({
+          target: randomAddress(),
+          selector: randomSelector(),
+          policy: await mockPolicy.getAddress()
+        })
+      ]
+      const root = getConfigurationRoot(configuration)
+
+      await demo.requestConfiguration(root)
+      await demo.complementRequestConfiguration(configuration)
+      const originalMaturity = await demo.rootConfigured(owner.address, root)
+      await time.increaseTo(originalMaturity + 30n)
+      await expect(demo.applyConfiguration(configuration)).to.be.revertedWithCustomError(
+        demo,
+        'RootConfigurationExpired'
+      )
+
+      await demo.requestConfiguration(root)
+      expect(await demo.rootConfigured(owner.address, root)).to.be.gt(originalMaturity)
+      expect(await demo.getConfigurationRoots(owner.address)).to.deep.equal([root])
+      expect(getConfigurationRoot(await demo.getConfigurations(root))).to.equal(root)
+      await expect(demo.applyConfiguration(configuration)).to.emit(demo, 'RootApplied')
     })
 
     it('Should still allow an expired root to be invalidated', async function () {

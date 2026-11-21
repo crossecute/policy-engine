@@ -49,7 +49,13 @@ export interface AccessInfo extends TxMeta {
 /**
  * Transaction information structure
  */
-export interface PendingInfo extends AccessInfo {
+export interface ConfigurationWindow {
   /** Timestamp when the configuration becomes active (in milliseconds) */
   activeFrom: bigint
+  /** Exclusive closing timestamp (in milliseconds), or null for an unlimited window */
+  expiresAt: bigint | null
+}
+
+export interface PendingInfo extends AccessInfo, ConfigurationWindow {
+  root: string
 }
