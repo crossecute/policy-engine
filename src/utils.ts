@@ -12,7 +12,7 @@ import {
 
 import { GUARD_STORAGE_SLOT } from '../lib/constants'
 import { sameHexString } from '../test/deploy/util/strings'
-import { Safe, SafePolicyGuard, SafeProxyFactory } from '../typechain-types'
+import { Safe, SafePolicyGuard, SafePolicyGuardBase, SafeProxyFactory } from '../typechain-types'
 
 const { solidityPacked } = ethers
 
@@ -96,7 +96,7 @@ export const EIP712_SAFE_TX_TYPE = {
 
 /**
  * The `SignatureExtension` type hash carrying policy context, mirroring
- * `SafePolicyGuard._CONTEXT_TYPE_HASH`.
+ * `SafePolicyGuardBase._CONTEXT_TYPE_HASH`.
  */
 export const POLICY_CONTEXT_TYPE_HASH = ethers.id('SafePolicyGuard.PolicyContext.v1')
 
@@ -457,7 +457,7 @@ export type EnableGuardParameters = {
   owners: Signer[]
   safe: Safe
   safePolicyGuard: SafePolicyGuard
-  configurations?: SafePolicyGuard.ConfigurationStruct[]
+  configurations?: SafePolicyGuardBase.ConfigurationStruct[]
   /** Also install the module guard. Needed for any test exercising the module path. */
   moduleGuard?: boolean
   /** Enable this module on the Safe before installing the guards. */
@@ -552,7 +552,7 @@ export function createConfiguration({
   operation = SafeOperation.Call,
   policy = ZeroAddress,
   data = '0x' as BytesLike
-}): SafePolicyGuard.ConfigurationStruct {
+}): SafePolicyGuardBase.ConfigurationStruct {
   return {
     target,
     selector,
@@ -568,7 +568,7 @@ export function createConfiguration({
  * @returns The root hash of the configuration.
  * @dev The root hash is created by encoding the configurations and hashing them with keccak256.
  */
-export function getConfigurationRoot(configurations: SafePolicyGuard.ConfigurationStruct[]): BytesLike {
+export function getConfigurationRoot(configurations: SafePolicyGuardBase.ConfigurationStruct[]): BytesLike {
   return ethers.keccak256(
     ethers.AbiCoder.defaultAbiCoder().encode(
       ['tuple(address target, bytes4 selector, uint8 operation, address policy, bytes data)[]'],

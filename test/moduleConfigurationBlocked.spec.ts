@@ -13,7 +13,7 @@ import {
   getConfigurationRoot,
   SafeOperation
 } from '../src/utils'
-import type { SafePolicyGuard } from '../typechain-types'
+import type { SafePolicyGuardBase } from '../typechain-types'
 import { deployAllowPolicy, deployMultiSendPolicy, deploySafeContracts, deploySafePolicyGuard } from './deploy'
 
 /**
@@ -48,7 +48,7 @@ describe('Module policy-change blocking', function () {
     })
 
     /** Installs `cfgs`, then enables both guard slots (module guard first — see below). */
-    async function configurePolicies(cfgs: SafePolicyGuard.ConfigurationStruct[] = []) {
+    async function configurePolicies(cfgs: SafePolicyGuardBase.ConfigurationStruct[] = []) {
       // `enableGuard` installs the module guard before the transaction guard, which matters here:
       // once the transaction guard is live, `setModuleGuard` is itself a guarded self-call needing
       // a configured policy, which this fixture does not install.

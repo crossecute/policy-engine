@@ -1,5 +1,6 @@
 import { loadFixture, time } from '@nomicfoundation/hardhat-network-helpers'
 import { expect } from 'chai'
+import { MaxUint256 } from 'ethers'
 
 import { ONE_DAY_IN_SECONDS } from '../lib/constants'
 import {
@@ -665,6 +666,21 @@ describe('SafePolicyGuard -- delayed configuration', function () {
         noDelayGuard,
         'RootConfigurationExpired'
       )
+    })
+
+    it('Should keep an unlimited root live until it is applied', async function () {
+      const { owner } = await loadFixture(fixture)
+      const { safePolicyGuard } = await deploySafePolicyGuard({ delay: 0n, expiry: MaxUint256 })
+      const root = getConfigurationRoot([])
+
+      await safePolicyGuard.connect(owner).requestConfiguration(root)
+      expect(await safePolicyGuard.rootExpiry(owner.address, root)).to.equal(MaxUint256)
+      await time.increase(ONE_DAY_IN_SECONDS)
+      await expect(safePolicyGuard.connect(owner).requestConfiguration(root))
+        .to.be.revertedWithCustomError(safePolicyGuard, 'RootAlreadyConfigured')
+        .withArgs(root)
+      await expect(safePolicyGuard.connect(owner).applyConfiguration([])).to.emit(safePolicyGuard, 'RootApplied')
+      expect(await safePolicyGuard.rootExpiry(owner.address, root)).to.equal(0n)
     })
 
     it('Should still allow an expired root to be invalidated', async function () {

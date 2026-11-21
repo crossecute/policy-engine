@@ -175,6 +175,11 @@ Two things to check when hardening an existing Safe:
 - **Modules enabled before hardening are unconstrained until the module guard is set.** Enumerate them first; `enableModule` afterwards requires a configured policy, but existing modules do not.
 - `configureImmediately` is rejected once either guard points at the policy guard, so all configuration after this point goes through the delay. Bootstrap fully before installing the guards.
 
+Each request captures its maturity timestamp and expiry window. Read them with
+`rootConfigured(safe, root)` and `rootExpiry(safe, root)`. A finite window includes the
+maturity timestamp and excludes the first timestamp at which the elapsed time equals expiry.
+Use `type(uint256).max` for an unlimited window. Zero expiry is invalid.
+
 ## Guard Removal
 
 To remove a guard, instead of baking in the delay mechanism within the guard contract, we use the delay mechanism which is already present for any policy to get activated. To remove a guard:

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 pragma solidity =0.8.30;
 
-import {SafePolicyGuard, AccessSelector, Operation} from "../../SafePolicyGuard.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {SafePolicyGuard} from "../../SafePolicyGuard.sol";
 import {IPolicy} from "../../interfaces/IPolicy.sol";
+import {Operation} from "../../interfaces/Operation.sol";
+import {AccessSelector} from "../../libraries/AccessSelector.sol";
 // solhint-disable-next-line no-unused-import
 import {IPolicyEngine} from "../../interfaces/IPolicyEngine.sol";
 
@@ -52,44 +54,8 @@ contract AppSafePolicyGuard is SafePolicyGuard {
      */
     constructor(uint256 delay, uint256 expiry) SafePolicyGuard(delay, expiry) {}
 
-    /**
-     * @dev TODO: Consider the security considerations of calling `checkTransaction` as a Safe transaction,
-     *      this can matter because the Safe can potentially modify state and might lead to unexpected interactions.
-     */
-    function _allowedCalls(
-        address to,
-        uint256 value,
-        bytes calldata data,
-        Operation operation
-    ) internal view override returns (bool) {
-        bytes4 selector = _decodeSelector(data);
-
-        // Invalidate Root
-        bool invalidateRootCall = to == address(this) &&
-            value == 0 &&
-            selector == this.invalidateRoot.selector &&
-            operation == Operation.CALL;
-
-        // Configure or confirm policy
-        bool requestOrApplyConfiguration = to == address(this) &&
-            value == 0 &&
-            (selector == this.requestConfiguration.selector ||
-                selector == this.complementRequestConfiguration.selector ||
-                selector == this.applyConfiguration.selector) &&
-            operation == Operation.CALL;
-
-        return requestOrApplyConfiguration || invalidateRootCall;
-    }
-
-    /**
-     * @notice Requests a policy configuration change.
-     * @param configureRoot The root of the configuration to be applied.
-     * @dev This can be used to set multiple policies at once.
-     */
-    function requestConfiguration(bytes32 configureRoot) external override {
-        require(rootConfigured[msg.sender][configureRoot] == 0, RootAlreadyConfigured(configureRoot));
-        rootConfigured[msg.sender][configureRoot] = block.timestamp + DELAY;
-        emit RootConfigured(msg.sender, configureRoot, block.timestamp + DELAY);
+    function _isConfigurationSelector(bytes4 selector) internal pure override returns (bool) {
+        return selector == this.complementRequestConfiguration.selector || super._isConfigurationSelector(selector);
     }
 
     /**
@@ -99,24 +65,14 @@ contract AppSafePolicyGuard is SafePolicyGuard {
      */
     function complementRequestConfiguration(Configuration[] calldata configurations) external {
         bytes32 configureRoot = keccak256(abi.encode(configurations));
-        require(rootConfigured[msg.sender][configureRoot] != 0, RootNotConfiguredYet(configureRoot));
+        require(rootExpiry(msg.sender, configureRoot) != 0, RootNotConfiguredYet(configureRoot));
         _configureRoots[msg.sender].add(configureRoot);
         _configurations[configureRoot] = configurations;
     }
 
-    /**
-     * @notice Invalidates a policy configuration change.
-     * @param configureRoot The root of the configuration to be invalidated.
-     * @dev Invalidation can only be done if the configuration is pending.
-     *      This is not behind a delay, as only pending configurations can be invalidated, and
-     *      this allows invalidating unintended policies immediately before it is confirmed.
-     */
-    function invalidateRoot(bytes32 configureRoot) external override {
-        require(rootConfigured[msg.sender][configureRoot] != 0, RootNotConfigured(configureRoot));
-        delete rootConfigured[msg.sender][configureRoot];
-        _configureRoots[msg.sender].remove(configureRoot);
-        delete _configurations[configureRoot];
-        emit RootInvalidated(msg.sender, configureRoot);
+    function invalidateRoot(bytes32 configureRoot) public override {
+        super.invalidateRoot(configureRoot);
+        _forgetConfiguration(configureRoot);
     }
 
     /**
@@ -126,22 +82,14 @@ contract AppSafePolicyGuard is SafePolicyGuard {
      */
     function applyConfiguration(Configuration[] calldata configurations) external override {
         bytes32 configureRoot = keccak256(abi.encode(configurations));
-        require(rootConfigured[msg.sender][configureRoot] != 0, RootNotConfigured(configureRoot));
-        require(block.timestamp >= rootConfigured[msg.sender][configureRoot], RootConfigurationPending());
-        delete rootConfigured[msg.sender][configureRoot];
+        _consumeRequest(configureRoot);
+        _forgetConfiguration(configureRoot);
+        _confirmConfigurations(configurations);
+    }
+
+    function _forgetConfiguration(bytes32 configureRoot) private {
         _configureRoots[msg.sender].remove(configureRoot);
         delete _configurations[configureRoot];
-        emit RootApplied(msg.sender, configureRoot);
-        for (uint256 i = 0; i < configurations.length; i++) {
-            _confirmPolicy(
-                msg.sender,
-                configurations[i].target,
-                configurations[i].selector,
-                configurations[i].operation,
-                configurations[i].policy,
-                configurations[i].data
-            );
-        }
     }
 
     /**

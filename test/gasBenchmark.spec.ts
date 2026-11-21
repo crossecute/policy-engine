@@ -10,7 +10,7 @@ import {
   EIP712_SAFE_MESSAGE_TYPE,
   createSafe
 } from '../src/utils'
-import { SafePolicyGuard } from '../typechain-types'
+import { SafePolicyGuardBase } from '../typechain-types'
 import {
   deployCoSignerPolicy,
   deployERC20ApprovePolicy,
@@ -396,7 +396,7 @@ describe('[@bench] Policies', () => {
         [spenderList.map((spender) => ({ spender, allowed: true }))]
       )
 
-      const configurations: SafePolicyGuard.ConfigurationStruct[] = [
+      const configurations: SafePolicyGuardBase.ConfigurationStruct[] = [
         {
           target: erc20TokenAddress,
           selector,
@@ -486,7 +486,7 @@ describe('[@bench] Policies', () => {
         [recipientList.map((recipient) => ({ recipient, allowed: true }))]
       )
 
-      const configurations: SafePolicyGuard.ConfigurationStruct[] = [
+      const configurations: SafePolicyGuardBase.ConfigurationStruct[] = [
         {
           target: erc20TokenAddress,
           selector,
